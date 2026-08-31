@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Environments
+.venv/
+venv/
+env/
+.conda/
+
+# Model artifacts / experiment outputs
+checkpoints*/
+runs/
+plots/
+*.pt
+
+# Data
+data/raw/
+*.csv
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Env vars / secrets
+.env
+
+# generated GBT descriptor-baseline results
+results_descriptor_seeds/
