@@ -1,20 +1,11 @@
 """
-Score both members of each mined matched pair and decompose the prediction delta. Two ordinary
-forward passes per pair -- no baselines, path integrals, or guidance. For an additive head
-`y_hat = sum_i s_i`, the analog-to-analog delta splits exactly into the substituted position and
-the shared core:
+Score both members of each mined matched pair and decompose the prediction delta.
+For an additive head, delta splits into the swapped fragment and the shared core:
 
     dy = d_sub + d_core        (src.attribution.matched_pair_decomposition)
 
-Because that needs only a PARTITION of each molecule, it covers Class B and every other N-changing
-transform, not just the bijection-friendly Class A swaps.
-
-Two things are reported per task:
-  * correlation of predicted dy against measured dy;
-  * the leakage distribution |d_core| / (|d_core| + |d_sub|) -- how much of the delta the model
-    produced by re-scoring atoms it did not change.
-
-Predictions and measured deltas are both taken in the model's training (transformed) space.
+Tthe dump records for each pair predicted dy, measured dy, d_sub and d_core (aggregated downstream by
+build_matched_pair_jsons.py). The per-task summary reports the leakage distribution |d_core| / (|d_core| + |d_sub|).
 
 Usage:
     python scripts/score/matched_pair_attribution.py \
@@ -172,7 +163,19 @@ def _sync(device):
         torch.cuda.synchronize()
 
 
-def _pair_record(task, cls, args, it, sd, dy_true, dy_attr, leakage, registry):
+def _pair_record(
+    task,
+    cls,
+    args,
+    it,
+    sd,
+    dy_true,
+    dy_attr,
+    leakage,
+    registry,
+    d_sub=float("nan"),
+    d_core=float("nan"),
+):
     """One flat JSONL row per scored pair, keeping `split` so a --split_filter all run stays
     re-sliceable by split. SMILES and native-unit labels are included so examples render without a
     registry re-run."""
@@ -194,20 +197,12 @@ def _pair_record(task, cls, args, it, sd, dy_true, dy_attr, leakage, registry):
         "dy_true": dy_true,
         "dy_attr": dy_attr,
         "leakage": leakage,
+        # signed substituent-/core-side deltas of the exact decomposition
+        # NaN for attention (no decomposition). Enables MAE|d_sub - meas|, the R-group
+        # localized attribution vs measured pair delta.
+        "d_sub": d_sub,
+        "d_core": d_core,
     }
-
-
-def pearson(a, b):
-    a, b = np.asarray(a, float), np.asarray(b, float)
-    if len(a) < 3 or a.std() < 1e-12 or b.std() < 1e-12:
-        return float("nan")
-    return float(np.corrcoef(a, b)[0, 1])
-
-
-def spearman(a, b):
-    ra = np.argsort(np.argsort(a)).astype(float)
-    rb = np.argsort(np.argsort(b)).astype(float)
-    return pearson(ra, rb)
 
 
 def main():
@@ -279,7 +274,6 @@ def main():
     registry = build_registry()
     featurized = featurize_registry(registry)
     model, kind, _ = load_model(args.checkpoint, args.device)
-    where = pairs_art["split"]
 
     if args.method == "additive" and kind != "additive":
         raise SystemExit(
@@ -470,6 +464,8 @@ def main():
                             attributed,
                             float(d["leakage"][k]),
                             registry,
+                            d_sub=float(d["d_sub"][k]),
+                            d_core=float(d["d_core"][k]),
                         )
                     )
 
@@ -481,8 +477,6 @@ def main():
                 "head": kind,
                 "n_pairs": len(items),
                 "task_sd": sd,
-                "pearson": pearson(dy_true, meas),
-                "spearman": spearman(dy_true, meas),
                 "median_abs_pred": float(np.median(np.abs(dy_true))),
                 "median_abs_meas": float(np.median(np.abs(meas))),
                 "leakage_median": float(np.nanmedian(leak)) if np.isfinite(leak).any() else None,
@@ -498,10 +492,6 @@ def main():
             print(
                 f"\n=== {task} / {cls} / split={args.split_filter} / method={args.method} "
                 f"({len(items)} pairs, model units, task SD {sd:.3f}) ==="
-            )
-            print(
-                f"  predicted vs measured dy : pearson {row['pearson']:+.3f}   "
-                f"spearman {row['spearman']:+.3f}"
             )
             print(
                 f"  median |dy|              : predicted {row['median_abs_pred']:.3f}   "

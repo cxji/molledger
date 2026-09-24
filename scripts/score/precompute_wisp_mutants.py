@@ -3,10 +3,6 @@ Precompute and cache the WISP element-substitution mutant graphs for every molec
 interpretability grid scores. Model-independent, so computed once and reused across seeds by
 matched_pair_attribution --method wisp --wisp_cache <path>.
 
-The cache is a dict {canonical_smiles: packed}, `packed` = src.wisp_mutants.build_mutants output.
-Molecule set = the union, over all tasks and every matched-pair collection (graph-identical and
-fragment-swap), of both members of every held-out (testany) pair, deduplicated by canonical SMILES.
-
 Usage:
     python scripts/score/precompute_wisp_mutants.py --out runs/ig_grid/wisp_mutants.pt
 """

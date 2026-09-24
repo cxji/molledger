@@ -1,12 +1,8 @@
 #!/usr/bin/env python
 """
 Test-split accuracy for the pooled + descriptor-inject-after-fix arm (checkpoints_pooled_desc_seeds).
-
-That model reads data.pos and carries 219 whole-molecule 2d3d descriptors concatenated to the pooled
-graph vector, so it lives on the 3D split with descriptors attached -- which is why it cannot ride the
-single 2D-split load in build_test_split_jsons.py. This computes its per-task {mae,rmse,pearson,
-spearman,r2} the same way (reusing eval_accuracy), and writes runs/pooled_desc_accuracy.json for
-src/metrics.py to fold in (same pattern as the GBT results).
+Separate script to read the descriptor data.
+Computes per-task MAE and Spearman and writes runs/pooled_desc_accuracy.json.
 
 Run:  python scripts/score/eval_pooled_desc_accuracy.py
 """

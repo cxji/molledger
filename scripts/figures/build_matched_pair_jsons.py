@@ -5,7 +5,7 @@ into the paper's report tables. No model, no re-scoring.
 Per collection, produces (mean +/- sd over the 3 init seeds):
   * counts                       -- pairs per (class, task).
   * localization (leakage)       -- median |D_core| / (|D_core| + |D_sub|).
-  * predicted-delta accuracy     -- Pearson r, Spearman rho, and MAE of predicted vs measured delta.
+  * predicted-delta accuracy     -- MAE of predicted vs measured delta.
 
 Collections: `held_out` (pairs with >= 1 test member; classes A, B, D) and `all_pairs` (every mined
 pair; classes A and B).
@@ -193,22 +193,6 @@ def select_best_lambda(repo, seed, forced, warn):
 # --------------------------------------------------------------------------------------------
 
 
-def pearson(a, b):
-    a, b = np.asarray(a, float), np.asarray(b, float)
-    if len(a) < 3 or a.std() < 1e-12 or b.std() < 1e-12:
-        return float("nan")
-    return float(np.corrcoef(a, b)[0, 1])
-
-
-def spearman(a, b):
-    a, b = np.asarray(a, float), np.asarray(b, float)
-    if len(a) < 3:
-        return float("nan")
-    ra = np.argsort(np.argsort(a)).astype(float)
-    rb = np.argsort(np.argsort(b)).astype(float)
-    return pearson(ra, rb)
-
-
 def _stat(values):
     """mean +/- sd over seeds, ignoring NaN; returns (mean, sd, n)."""
     v = np.asarray([x for x in values if x is not None and not np.isnan(x)], float)
@@ -277,7 +261,7 @@ def build(args):
         if not sel:
             return None
         if cls == "all":
-            # De-dup pairs mined as both a single-atom swap and a fragment swap (~1152 of 1170), by
+            # De-dup pairs mined as both a single-atom swap and a fragment swap, by
             # the unordered {a, b} pair, keeping the first occurrence (graph-identical file loads
             # first). Only "all" needs this; per-class cells are already unique. Rows without a/b
             # identity pass through untouched.
@@ -296,13 +280,22 @@ def build(args):
         leak = [
             r["leakage"] for r in sel if r["leakage"] is not None and not np.isnan(r["leakage"])
         ]
+        # Explained delta-MAE: mean |d_sub - measured delta|, d_sub is substituent (incl.
+        # linker) portion of the predicted pair delta. NaN for attention (no decomposition).
+        dsub = [
+            abs(r["d_sub"] - r["meas"])
+            for r in sel
+            if r.get("d_sub") is not None
+            and not np.isnan(r["d_sub"])
+            and r["meas"] is not None
+            and not np.isnan(r["meas"])
+        ]
         return {
             "n": len(sel),
-            "pearson": pearson(dy, me),
-            "spearman": spearman(dy, me),
             # native-unit mean |predicted delta - measured delta|.
             "mae_delta": float(np.mean(np.abs(np.asarray(dy, float) - np.asarray(me, float)))),
             "leakage": float(np.median(leak)) if leak else float("nan"),
+            "dsub_mae": float(np.mean(dsub)) if dsub else float("nan"),
         }
 
     # task universe from the exact dumps (all 11 tasks)
@@ -369,10 +362,9 @@ def build(args):
                         continue
                     results[collection][cls][task][col] = {
                         "n": _stat([b["n"] for b in per_seed]),
-                        "pearson": _stat([b["pearson"] for b in per_seed]),
-                        "spearman": _stat([b["spearman"] for b in per_seed]),
                         "mae_delta": _stat([b["mae_delta"] for b in per_seed]),
                         "leakage": _stat([b["leakage"] for b in per_seed]),
+                        "dsub_mae": _stat([b["dsub_mae"] for b in per_seed]),
                     }
 
     return {

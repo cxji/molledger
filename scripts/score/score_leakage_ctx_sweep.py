@@ -1,4 +1,4 @@
-"""Score fragment-pair LEAKAGE for the MolLedger global-context WIDTH ladder
+"""Score fragment-pair leakage for different MolLedger global-context widths
 (ctx=0 sum-mean base, then gctx2/4/8/16, all uniform constant-lambda anchor), best-lambda per seed.
 Mirrors build_val_global_context_ablation.NEW_ARMS but for leakage. Dumps per-pair jsonl into
 runs/leakage_ctx_sweep/ ; scores are exact-additive so leakage = |D_core|/(|D_core|+|D_sub|).

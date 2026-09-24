@@ -2,12 +2,9 @@
 Cache per-atom attributions for the chosen example pairs. For each pair in runs/pair_examples.json,
 at a single seed (default init 19), run every interpretability-figure arm's own checkpoint + method
 on both members and store the per-atom score for the pair's task column, plus the task's ruled
-Crippen/TPSA anchor. The arm set + (checkpoint, method, kwargs) come from
-build_test_split_jsons.COLUMNS, so the visualization uses the same attributions as the faithfulness
-tables.
+Crippen/TPSA anchor.
 
 Output: runs/pair_examples_attr.json, consumed by scripts/figures/plot_pair_interpretations.py.
-Needs a GPU (checkpoints + IG/LIME).
 
     python scripts/score/score_pair_examples.py            # all 5 pairs, seed 19
 """

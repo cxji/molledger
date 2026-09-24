@@ -2,7 +2,7 @@
 
 Reads the two aggregated result JSONs and exposes the per-model / per-arm numbers that
 scripts/figures/plot_results.py plots:
-  runs/test_split_tables.json   -- test-split accuracy + faithfulness / single-molecule exactness
+  runs/test_split_tables.json   -- test-split accuracy + single-molecule exactness
   runs/matched_pair_tables.json -- matched-pair localization (leakage), predicted-delta accuracy,
                                    and matched-pair completeness gap
 
@@ -12,7 +12,6 @@ and the pooled+descriptor accuracy from runs/pooled_desc_accuracy.json when pres
 
 import glob
 import json
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -42,10 +41,7 @@ def _gbt_load():
                 continue
             pt[t] = {
                 "mae": arm.get("test_mae_native"),
-                "rmse": arm.get("test_rmse_native"),
-                "pearson": arm.get("test_pearson"),
                 "spearman": arm.get("test_spearman"),
-                "r2": arm.get("test_r2"),
             }
         out[str(d["init_seed"])] = pt
     return out
@@ -88,30 +84,6 @@ def acc(seed, model, task):
     return TS["per_seed"][seed]["acc"].get(model, {}).get(task)
 
 
-@lru_cache(maxsize=1)
-def _anchor_signs():
-    """task -> anchor_sign from src.data.multitask.ANCHOR_RULE (the 'ruled' anchors)."""
-    from src.data.multitask import ANCHOR_RULE  # heavy (torch); import lazily, cache once
-
-    ref = TS.get("anchor_ref")
-    if ref not in (None, "ruled"):
-        import warnings
-
-        warnings.warn(f"faith_r orients signs for the 'ruled' anchors, but TS anchor_ref={ref!r}")
-    return {t: s for t, (_a, s) in ANCHOR_RULE.items()}
-
-
-def faith_r(seed, arm, task):
-    """Per-molecule-mean Pearson r vs the anchor reference, oriented by the task's anchor_sign so
-    positive = faithful to the anchor as trained. LigandFormer is the exception: its attention r is
-    computed against |anchor| (unsigned), so it is returned unoriented."""
-    v = TS["per_seed"][seed]["faith"].get(arm, {}).get(task)
-    if not (v and v[0] is not None):
-        return None
-    sign = 1 if arm == "ligandformer" else _anchor_signs().get(task, 1)
-    return sign * v[0]
-
-
 def single_gap(seed, arm, task):
     """Single-molecule exactness gap: mean |sum_i a_i - dy_hat| over the held-out test split
     (from test_split_tables.json). ~0 for the exact additive arms; None for LigandFormer."""
@@ -124,7 +96,7 @@ def mp_cell(collection, cls, task, arm, field):
     if arm.endswith("_zeros"):
         arm = arm[: -len("_zeros")]
     c = MP["results"][collection][cls].get(task, {}).get(arm)
-    return c[field] if c else None  # {'mean':..,'sd':..} or None
+    return c.get(field) if c else None  # {'mean':..,'sd':..} or None
 
 
 def mp_count(coll, cls, task):

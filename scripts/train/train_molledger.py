@@ -1,10 +1,6 @@
 """
-Trains MolLedger: one GINEConv (2D) backbone with a choice of readout head --
-additive sum-of-atom-scores (MolLedger), non-additive pooled MLP, GNAN, or LigandFormer --
-over the SAME global scaffold split, so every arm's numbers are directly comparable.
-
-Reading the ablation (all trained property-only by default, --lambda_anchor 0):
-    pooled  vs additive  (same backbone)  -> cost of the additive-decomposition constraint
+Trains MolLedger and its comparison models: the additive sum-of-atom-scores head (MolLedger) and
+the pooled MLP head on a GINEConv backbone, plus the GNAN and LigandFormer architectures.
 
 Usage:
     python scripts/train/train_molledger.py --head pooled --epochs 100

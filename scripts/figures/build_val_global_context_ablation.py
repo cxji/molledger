@@ -301,7 +301,9 @@ def plot():
         cell = leak.get(arm, {}).get(task)
         return cell if cell is not None else (np.nan, 0.0)
 
-    order = [k for k in PLOT_ORDER if any(k in ps[s] for s in seeds)]  # skip arms with no checkpoint
+    order = [
+        k for k in PLOT_ORDER if any(k in ps[s] for s in seeds)
+    ]  # skip arms with no checkpoint
     ncol = len(TASKS_MAIN)
     _figh = 11.5  # 4 rows
     fig, axes = plt.subplots(4, ncol, figsize=(2.9 * ncol, _figh), squeeze=False)
@@ -309,7 +311,7 @@ def plot():
     rows = [
         ("mae", "MAE ↓", "auto"),
         ("spearman", "Spearman ↑", (0, 1)),
-        ("faith", "Faithfulness ↑", "auto"),
+        ("faith", "Anchor concordance ↑", "auto"),
         ("leakage", "Leakage ↓", (0, 0.55)),
     ]
     for r, (mkey, mname, ylim) in enumerate(rows):

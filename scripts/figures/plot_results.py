@@ -4,7 +4,7 @@
   1. plots/perf_mae_spearman.pdf   -- MAE (top row) + Spearman (bottom row), one subplot per task,
                                       one bar per model, task labelled with (n = # test samples).
   2. plots/interp_heldout.pdf      -- interpretability on the held-out set: one column per task,
-                                      rows = faithfulness / exactness gap / leakage, bars per
+                                      rows = exactness gap / leakage / explained delta-MAE, bars per
                                       attribution method; columns labelled with (n = # pairs).
   3. plots/attr_timing_ms_per_molecule.pdf + plots/ig_steps_tradeoff.pdf -- attribution compute cost.
 
@@ -26,10 +26,10 @@ from src.metrics import (  # noqa: E402
     MODELS,
     SEEDS,
     TASKS,
+    TS,
     acc,
     attr_timing,
     clean,
-    faith_r,
     mp_cell,
     mp_count,
     single_gap,
@@ -99,15 +99,16 @@ def _colors(labels):
     return [METHOD_COLORS.get(lab, PALETTE[i % len(PALETTE)]) for i, lab in enumerate(labels)]
 
 
-# interpretability methods, bar order: native per-atom read-outs first (MolLedger pair, GNAN pair,
-# LigandFormer), then the post-hoc pooled-head attribution baselines (IG, Grad-CAM, LIME).
+# interpretability methods, bar order: native per-atom read-outs first (MolLedger pair, GNAN pair),
+# then the post-hoc pooled-head attribution baselines (IG, Grad-CAM, LIME, WISP). LigandFormer is
+# excluded: its attention read-out is a non-negative, directionless per-atom weight, so leakage /
+# exactness-gap / Explained-delta-MAE are not defined for it.
 INTERP_METHODS = [
     ("ours_best", "Anchored MolLedger"),
     ("summean_best", "MolLedger (no context)"),  # accuracy<->leakage tradeoff ablation
     ("ours_none", "Unanchored MolLedger"),
     ("gnan_best", "Anchored GNAN"),
     ("gnan", "Unanchored GNAN"),
-    ("ligandformer", "LigandFormer"),  # self-attention; leakage/exactness-gap are None for this arm
     ("ig_pool_zeros", "IG"),
     ("gradcam_pool", "Grad-CAM"),
     ("lime_pool", "LIME"),
@@ -116,32 +117,41 @@ INTERP_METHODS = [
 # columns: (key, source, pretty label, lower_is_better). Direction shown by an arrow next to the
 # y-axis label ($\downarrow$ = lower better, $\uparrow$ = higher better).
 INTERP_COLS = [
-    ("faith", "faith", "Faithfulness", False),
     # single-molecule exactness gap over the held-out test split (source "single_gap"), not the
     # matched-pair completeness gap.
     ("gap", "single_gap", "Exactness gap", True),
     ("leakage", "mp", "Leakage", True),
+    # Explained delta-MAE: mean |d_sub - measured delta| (native units), pooled over held-out pairs.
+    # d_sub is the portion of the predicted pair delta the model localises onto the swapped fragment
+    # (incl. linker); this measures how far that explained delta is from the measured delta. IG has no
+    # mp dump so it is blank here, like its leakage cell.
+    ("dsub_mae", "mp", r"Explained $\Delta$ MAE", True),
 ]
 DIR_ARROW = {True: r"$\downarrow$", False: r"$\uparrow$"}  # lower-better / higher-better
 
-# Each performance model maps to the mp arm carrying the same checkpoint's predictions, for the
-# matched-pair delta MAE row. Pooled GNN shares its checkpoint with the other pooled attribution
-# arms, so ig_pool_zeros is the canonical read for all of them.
+# Each performance model maps to the mp arm(s) carrying the same checkpoint's predictions, for the
+# matched-pair delta MAE row. The 4 post-hoc methods (IG / Grad-CAM / LIME / WISP) are all applied to
+# the same pooled GNN, so its performance metrics are shared across them (identical delta MAE). Its
+# value is therefore a preference-ordered list: ig_pool is canonical but is absent from the mp
+# aggregation for some tasks, so it falls back to a sibling pooled arm. Every other model has a
+# single arm.
 PERF_TO_MP_ARM = {
-    "additive_best": "ours_best",
-    "additive_none": "ours_none",
-    "summean_best": "summean_best",
-    "pooled_none": "ig_pool_zeros",
-    "gnan_best": "gnan_best",
-    "gnan": "gnan",
-    "ligandformer": "ligandformer",
+    "additive_best": ["ours_best"],
+    "additive_none": ["ours_none"],
+    "summean_best": ["summean_best"],
+    "pooled_none": ["ig_pool", "gradcam_pool", "lime_pool", "wisp_pool"],
+    "gnan_best": ["gnan_best"],
+    "gnan": ["gnan"],
+    "ligandformer": ["ligandformer"],
     # non-attribution baselines: their own predicted-delta dumps (eval_pair_delta_baselines.py)
-    "pooled_desc": "pooled_desc",
-    "gbt_227": "gbt_227",
+    "pooled_desc": ["pooled_desc"],
+    "gbt_227": ["gbt_227"],
 }
 
 
-LOG_FLOOR = 1e-3  # log-axis bottom for the exactness-gap row: below IG's gap, above exact-arm round-off
+LOG_FLOOR = (
+    1e-3  # log-axis bottom for the exactness-gap row: below IG's gap, above exact-arm round-off
+)
 
 
 def _bar(
@@ -179,7 +189,7 @@ def _bar(
                 linewidth=0.0,
                 zorder=0.5,
             )
-    if all(np.isnan(m) for m in ms):  # e.g. a task with no faithfulness reference
+    if all(np.isnan(m) for m in ms):  # e.g. a task with no anchor
         ax.set_ylim(0, 1)
         ax.set_yticks([])  # empty cell: drop ticks/gridlines so only the label reads
         ax.grid(False)
@@ -216,7 +226,9 @@ def _bar(
         ax.set_title(title, fontsize=11)
     if ylabel:
         ax.set_ylabel(ylabel, fontsize=12)
-        if ylabel_y is not None:  # nudge the label along the axis, keeping x aligned with other rows
+        if (
+            ylabel_y is not None
+        ):  # nudge the label along the axis, keeping x aligned with other rows
             x = ax.yaxis.label.get_position()[0]
             ax.yaxis.label.set_position((x, ylabel_y))
     if floor_zero and not logscale and not all(np.isnan(m) for m in ms):
@@ -226,16 +238,61 @@ def _bar(
         # A wholly-negative bar clips to zero height and reads as missing; label its signed value.
         for xi, m in zip(np.arange(len(ms)), ms):
             if not np.isnan(m) and m < 0:
+                # written vertically and centred on the bar so it fits the narrow gap between
+                # neighbouring bars rather than overrunning them.
                 ax.annotate(
                     f"-{abs(m):.2f}".replace("-0.", "-."),
-                    (xi - 0.4, 0),
+                    (xi, 0),
                     textcoords="offset points",
-                    xytext=(1, 2),
-                    ha="left",
+                    xytext=(0, 2),
+                    rotation="vertical",
+                    ha="center",
                     va="bottom",
-                    fontsize=9,
+                    fontsize=8,
                     color="black",
                 )
+    ax.tick_params(axis="y", labelsize=9)
+    sns.despine(ax=ax)
+
+
+def _bar_floored(ax, labels, means, stds, floors, title=None, ylabel=None, ylabel_y=None):
+    """Two-tone Explained-ΔMAE bars: faded [0, floor] segment (the arm's own Pair-ΔMAE) + solid
+    [floor, mean] excess (localization cost). floor >= mean draws the whole bar transparent"""
+    x = np.arange(len(labels))
+    cols = _colors(labels)
+    ms = [m if m is not None else np.nan for m in means]
+    es = [s if s is not None else 0.0 for s in stds]
+    fl = [f if f is not None else np.nan for f in floors]
+    for xi, m, e, f, col in zip(x, ms, es, fl, cols):
+        if np.isnan(m):
+            continue
+        if np.isnan(f) or f <= 0.0:  # no usable floor: single solid bar
+            ax.bar(xi, m, color=col, edgecolor="black", linewidth=0.4, yerr=e, capsize=2, zorder=2)
+        elif f < m:  # faded floor + solid excess
+            ax.bar(xi, f, color=col, alpha=0.32, edgecolor="none", zorder=1)
+            ax.bar(
+                xi,
+                m - f,
+                bottom=f,
+                color=col,
+                edgecolor="black",
+                linewidth=0.4,
+                yerr=e,
+                capsize=2,
+                zorder=2,
+            )
+        else:  # floor >= mean: whole bar transparent
+            ax.bar(xi, m, color=col, alpha=0.32, edgecolor="none", yerr=e, capsize=2, zorder=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels([])
+    ax.set_ylim(bottom=0)
+    if title:
+        ax.set_title(title, fontsize=11)
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=12)
+        if ylabel_y is not None:
+            xx = ax.yaxis.label.get_position()[0]
+            ax.yaxis.label.set_position((xx, ylabel_y))
     ax.tick_params(axis="y", labelsize=9)
     sns.despine(ax=ax)
 
@@ -276,23 +333,29 @@ def plot_performance(tasks, fname):
     """MAE (top) + Spearman (middle) + matched-pair delta MAE (bottom), one column per task.
     Delta-MAE is the predicted-vs-measured pair delta, pooled over held-out matched pairs
     (mp arm per PERF_TO_MP_ARM)."""
+    # (key, label, lower_is_better) -> arrow appended to the row's y-label (MAE/ΔMAE down, Spearman up)
     metrics = [
-        ("mae", "MAE"),
-        ("spearman", "Spearman"),
-        ("delta_mae", r"Matched-pair $\Delta$ MAE"),
+        ("mae", "MAE", True),
+        ("spearman", "Spearman", False),
+        ("delta_mae", r"Pair $\Delta$ MAE", True),
     ]
     nrow, ncol = len(metrics), len(tasks)
     figh = 2.0 * nrow  # matches the interpretability figure's aspect
     fig, axes = plt.subplots(nrow, ncol, figsize=(2.0 * ncol, figh), squeeze=False)
     short = [lab for _, lab in MODELS]
-    for r, (mkey, mname) in enumerate(metrics):
+    for r, (mkey, mname, lower) in enumerate(metrics):
         for c, task in enumerate(tasks):
             ax = axes[r][c]
             means, stds = [], []
             for mk, _ in MODELS:
                 if mkey == "delta_mae":
-                    arm = PERF_TO_MP_ARM.get(mk)
-                    cell = mp_cell("held_out", "all", task, arm, "mae_delta") if arm else None
+                    # equivalent arms in preference order (see PERF_TO_MP_ARM); take the first with a
+                    # cell, so a task missing the canonical arm falls back to a sibling.
+                    cell = None
+                    for arm in PERF_TO_MP_ARM.get(mk, []):
+                        cell = mp_cell("held_out", "all", task, arm, "mae_delta")
+                        if cell:
+                            break
                     means.append(cell["mean"] if cell else None)
                     stds.append(cell["sd"] if cell else None)
                 else:
@@ -310,7 +373,14 @@ def plot_performance(tasks, fname):
                 if r == 0
                 else None
             )
-            _bar(ax, short, means, stds, title=title, ylabel=mname if c == 0 else None)
+            _bar(
+                ax,
+                short,
+                means,
+                stds,
+                title=title,
+                ylabel=f"{mname} {DIR_ARROW[lower]}" if c == 0 else None,
+            )
             if mkey == "spearman":
                 ax.set_ylim(0, 1)
     top = _title_legend(fig, figh, "Model performance", short, ncol=int(np.ceil(len(short) / 2)))
@@ -325,9 +395,6 @@ def plot_performance(tasks, fname):
 # ------------------------------------------------------------------- interp helpers
 def _interp_cell(coll, cls, task, arm, field, source):
     """(mean, std) for one method on one property/metric."""
-    if source == "faith":
-        vals = clean([faith_r(s, arm, task) for s in SEEDS])  # signed r (anchor direction)
-        return (np.mean(vals), np.std(vals)) if vals else (None, None)
     if source == "single_gap":
         vals = clean([single_gap(s, arm, task) for s in SEEDS])
         return (np.mean(vals), np.std(vals)) if vals else (None, None)
@@ -336,7 +403,7 @@ def _interp_cell(coll, cls, task, arm, field, source):
 
 
 def _interp_grid(props, coll, fname, suptitle, log_gap=False):
-    """props = [(cls, task), ...] -> one column each; the 4 interpretability metrics are the rows.
+    """props = [(cls, task), ...] -> one column each; the interpretability metrics are the rows.
     Bars per method; column labelled with the property and (n = # matched pairs).
     log_gap=True renders only the exactness-gap row on a log y-axis; every other row stays linear."""
     labels = [lab for _, lab in INTERP_METHODS]
@@ -344,8 +411,8 @@ def _interp_grid(props, coll, fname, suptitle, log_gap=False):
     figh = 2.0 * nrow  # matches plot_performance's per-row height
     fig, axes = plt.subplots(nrow, ncol, figsize=(2.2 * ncol, figh), squeeze=False)
     for c, (cls, task) in enumerate(props):
-        m_pairs = mp_count(coll, cls, task)  # matched pairs -> leakage/gap sample size
-        n_mol = TESTN.get(task)  # held-out test molecules -> faithfulness sample size
+        m_pairs = mp_count(coll, cls, task)  # matched pairs -> leakage/gap/dsub sample size
+        n_mol = TESTN.get(task)
         for r, (field, source, clabel, lower) in enumerate(INTERP_COLS):
             ax = axes[r][c]
             means, stds = [], []
@@ -353,22 +420,24 @@ def _interp_grid(props, coll, fname, suptitle, log_gap=False):
                 m, s = _interp_cell(coll, cls, task, arm, field, source)
                 means.append(m)
                 stds.append(s)
-            # LigandFormer's leakage/exactness-gap are non-commensurable (attention read-out): mark
-            # those cells as not-computable (hatch) rather than letting the empty slot read as 0.
-            na_mask = [
-                arm == "ligandformer" and field in ("leakage", "gap") for arm, _ in INTERP_METHODS
-            ]
-            # anchor-less tasks have no faithfulness reference or single-molecule gap: label those
-            # empty cells "no anchor" rather than the generic "n/a".
+            # anchor-less tasks have no single-molecule gap: label those empty cells "no anchor"
+            # rather than the generic "n/a".
             empty_label = (
-                "no anchor"
-                if (source in ("faith", "single_gap") and not _has_faith(task))
-                else "n/a"
+                "no anchor" if (source == "single_gap" and not _has_anchor(task)) else "n/a"
             )
             row_log = log_gap and field == "gap"  # only the exactness-gap row goes log
             ylab = None
             if c == 0:
                 ylab = f"{clabel}{DIR_ARROW[lower]}" + ("\n(log scale)" if row_log else "")
+            if field == "dsub_mae":
+                # Two-tone bars: faded [0, Pair-ΔMAE] floor + solid excess. Floor is the same arm's
+                # mae_delta, in dsub_mae units.
+                floors = [
+                    _interp_cell(coll, cls, task, arm, "mae_delta", "mp")[0]
+                    for arm, _ in INTERP_METHODS
+                ]
+                _bar_floored(ax, labels, means, stds, floors, ylabel=ylab)
+                continue
             _bar(
                 ax,
                 labels,
@@ -378,9 +447,7 @@ def _interp_grid(props, coll, fname, suptitle, log_gap=False):
                 if r == 0
                 else None,
                 ylabel=ylab,
-                ylabel_y=0.55 if (c == 0 and field == "faith") else None,  # lift Faithfulness a touch
                 annotate_zero=(field in ("gap", "leakage")),
-                na_mask=na_mask,
                 empty_label=empty_label,
                 floor_zero=True,
                 logscale=row_log,
@@ -395,9 +462,9 @@ def _interp_grid(props, coll, fname, suptitle, log_gap=False):
 
 
 # ------------------------------------------------------------------- Plot 2 & 3
-def _has_faith(task):
-    """True if the task has a Crippen/TPSA faithfulness reference."""
-    return any(faith_r(s, "ours_best", task) is not None for s in SEEDS)
+def _has_anchor(task):
+    """True if the task has a Crippen/TPSA anchor."""
+    return TS["reference_anchor"].get(task) in ("crippen", "tpsa")
 
 
 def plot_interp_heldout_main():

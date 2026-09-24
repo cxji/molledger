@@ -1,18 +1,9 @@
 """
-Descriptor + gradient-boosted-tree baseline testing whether 3D geometry carries signal for these
-endpoints, independently of any GNN. Same molecules, same scaffold split, same model class; the
-two arms differ only in whether the feature vector includes 3D descriptors.
+Descriptor + gradient-boosted-tree baseline.
 
-Feature blocks (identical rows in both arms):
+Feature blocks:
   2D   -- all ~210 RDKit 2D descriptors.
-  +3D  -- RDKit's 3D descriptor set (Asphericity, Eccentricity, InertialShapeFactor, NPR1/2,
-          PBF, PMI1-3, RadiusOfGyration, SpherocityIndex) plus molecular extent, size-normalised
-          compactness, and counts/lengths of the through-space contacts from src/data/geom_edges.py
-          (total, polar-polar, donor-acceptor).
-
-Per task, rows with a non-NaN label; hyperparameters chosen on the scaffold VALID split; test MAE
-reported in model space and native units, with a paired bootstrap CI on the 2D -> 2D+3D difference.
-Runs on CPU in a few minutes.
+  +3D  -- RDKit's 3D descriptor set
 
     python scripts/train/descriptor_baseline.py
     python scripts/train/descriptor_baseline.py --conformer_cache data/raw/multitask/conformers.pt
@@ -77,14 +68,13 @@ GRID = [
 ]
 
 
-def _corr(a, b, kind):
-    """Pearson/Spearman with a NaN guard for constant vectors (scipy warns and returns nan)."""
-    from scipy.stats import pearsonr, spearmanr
+def _spearman(a, b):
+    """Spearman with a NaN guard for constant vectors (scipy warns and returns nan)."""
+    from scipy.stats import spearmanr
 
     if a.std() < 1e-12 or b.std() < 1e-12 or len(a) < 3:
         return float("nan")
-    r = (pearsonr if kind == "pearson" else spearmanr)(a, b)[0]
-    return float(r)
+    return float(spearmanr(a, b)[0])
 
 
 def fit_select(Xtr, ytr, Xva, yva, seed):
@@ -182,20 +172,15 @@ def main():
             model, va_mae, cfg = fit_select(Xtr, ytr_a, X["valid"][m["valid"]], yva, est_seed)
             pred = model.predict(X["test"][m["test"]])
             errs[arm] = np.abs(pred - yte)
-            # native-unit metrics, matching build_test_split_jsons._metrics so the GBT row is
-            # directly comparable to the GNN rows (MAE/RMSE native; Pearson/Spearman/R^2 scale-free).
+            # native-unit MAE and Spearman, matching build_test_split_jsons._metrics
             pnat = inverse_transform(spec.label_transform, torch.tensor(pred)).numpy()
             ynat = inverse_transform(spec.label_transform, torch.tensor(yte)).numpy()
             enat = pnat - ynat
-            sst = float(((ynat - ynat.mean()) ** 2).sum())
             row[arm] = {
                 "val_mae": va_mae,
                 "test_mae_model": float(errs[arm].mean()),
                 "test_mae_native": float(np.abs(enat).mean()),
-                "test_rmse_native": float(np.sqrt((enat**2).mean())),
-                "test_pearson": _corr(pnat, ynat, "pearson"),
-                "test_spearman": _corr(pnat, ynat, "spearman"),
-                "test_r2": float(1.0 - (enat**2).sum() / sst) if sst > 0 else float("nan"),
+                "test_spearman": _spearman(pnat, ynat),
                 "config": cfg,
             }
             agg[arm].append(float(errs[arm].mean()) / float(label_scales[k]))

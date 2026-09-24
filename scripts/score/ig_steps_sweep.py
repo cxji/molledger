@@ -1,9 +1,7 @@
 """IG completeness-gap vs path-steps sweep on the VALIDATION split.
 
-Characterises IG's exactness/runtime tradeoff WITHOUT touching the test split, so the step count the
-paper reports (256) is never tuned on test data. For the pooled IG arm actually plotted in the
-interpretability figure -- ig_pool_zeros: the pooled_none head, baseline=zeros -- and for each init
-seed, it sweeps --steps and records, over the first --limit validation molecules:
+Characterizes IG's exactness/runtime tradeoff on the validation split
+for the pooled IG method plotted in the interpretability figure
 
   * the per-task completeness gap  |sum_i a_i - (y_hat - y_hat(0))|  (src.attribution.completeness),
   * the IG attribution wall-time (ms/molecule, CUDA-synchronised).
@@ -12,8 +10,7 @@ The gap falls as O(1/steps) with no floor (it is pure path-discretisation error)
 steps x #tasks backward passes, so it grows ~linearly in steps. Together those two columns are the
 exactness-vs-timing tradeoff.
 
-Inference only; one GPU. Writes runs/ig_steps_sweep_val.json and REFUSES to overwrite it, so no
-existing cache is touched.
+Inference only; one GPU. Writes runs/ig_steps_sweep_val.json
 
     python scripts/score/ig_steps_sweep.py                  # steps 16..512, 300 val molecules, 3 seeds
 """

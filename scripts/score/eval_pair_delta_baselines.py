@@ -1,10 +1,8 @@
 #!/usr/bin/env python
 """
 Matched-pair predicted-delta dumps for the GBT (227 descriptors) and pooled+descriptor GNN
-baselines: per pair, dy = yhat(A) - yhat(B) vs. the measured delta. No per-atom attribution, so
-leakage is null. Rows are written in the schema build_matched_pair_jsons.py reads (task, class,
-split, meas, dy_true, task_sd, leakage). Units are model space (the per-task label_transform
-applied), matching the exact/IG/GNAN dumps.
+baselines: per pair, dy = yhat(A) - yhat(B) vs. the measured delta.
+Rows are written in the schema build_matched_pair_jsons.py reads.
 
     python scripts/score/eval_pair_delta_baselines.py --arm gbt         --seed 19
     python scripts/score/eval_pair_delta_baselines.py --arm pooled_desc --seed 19 --device cuda

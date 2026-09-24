@@ -59,6 +59,9 @@ def _pred_native(task, val):
 RDLogger.DisableLog("rdApp.*")
 REPO = Path(__file__).resolve().parents[2]
 ARM_LABEL = dict(INTERP_METHODS)  # ours_best -> "Anchored MolLedger", etc.
+# LigandFormer is kept in the case-study rows but was dropped from the aggregate bar figures'
+# INTERP_METHODS, so restore its row label here.
+ARM_LABEL.setdefault("ligandformer", "LigandFormer")
 
 # per-pair right-column override where the optimal direction is not monotonic: "a"/"b" goes RIGHT.
 RIGHT_OVERRIDE = {"class_d/logd": "a"}

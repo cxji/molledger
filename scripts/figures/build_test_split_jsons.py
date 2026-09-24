@@ -1,14 +1,11 @@
 """
-Test-split JSON tables: model accuracy, attribution faithfulness, and exactness.
+Test-split JSON tables: model accuracy and exactness.
 
 Runs inference once per (model, seed) over the held-out test split and reports, aggregated as
 mean [min, max] over the init seeds:
 
   * Accuracy (native units)  -- per task, for each of the 3 trained models (method-independent):
                                 MAE (native units) and Spearman rho (scale-free).
-  * Faithfulness             -- per-molecule Pearson of the per-atom attribution against the
-                                per-atom Crippen/TPSA reference, averaged over molecules
-                                (src.attribution.faithfulness). One column per method arm.
   * Exactness                -- mean |sum_i a_i - dy_hat| completeness gap
                                 (src.attribution.completeness). One column per arm.
 
@@ -18,15 +15,11 @@ MODELS (3 checkpoints per seed):
                              lam = per-seed argmin validation best_metric over {0.1, 0.3}
   * pooled, no descriptors   checkpoints_pooled_seeds/ablation_gin_pooled_none_init{seed}
 
-METHOD ARMS (faithfulness + exactness columns, matching the matched-pair table columns):
+METHOD ARMS (exactness columns, matching the matched-pair table columns):
   * ours_none      additive scores on the unanchored additive checkpoint
   * ours_best      additive scores on the best-anchor additive checkpoint
   * ig_pool_zeros  zero-baseline integrated gradients on the pooled/none checkpoint, plus the
                    post-hoc gradcam_pool / lime_pool / wisp_pool arms on the same checkpoint
-
-FAITHFULNESS REFERENCE:
-  Per-atom reference is the ruled Crippen/TPSA anchor each model was trained toward, applied across
-  all method columns. Tasks whose reference anchor is `none` get no faithfulness row.
 
 Usage:
     python scripts/figures/build_test_split_jsons.py --json_out runs/test_split_tables.json
@@ -54,7 +47,7 @@ from scripts.train.train_molledger import (  # noqa: E402
     forward_model,
     subset_tasks,
 )
-from src.attribution import attribute, completeness, faithfulness  # noqa: E402
+from src.attribution import attribute, completeness  # noqa: E402
 from src.data.multitask import (  # noqa: E402
     GRAPH_TASK_SPECS,
     apply_anchor_rule,
@@ -67,7 +60,7 @@ SEEDS = [19, 209, 31]
 ANCHOR_DIR_SUFFIX = {0.1: "_anchor0.1-shape-rule", 0.3: "_anchor0.3-shape-rule"}
 
 # report-column key -> (human label, model key, attribution method, extra method kwargs).
-# Keys match the arms in src/metrics.py so faithfulness lines up with the matched-pair metrics.
+# Keys match the arms in src/metrics.py so the exactness gap lines up with the matched-pair metrics.
 COLUMNS = [
     ("ours_none", "Ours (exact, unanchored)", "additive_none", "additive", {}),
     ("ours_best", "Ours (exact, best anchor)", "additive_best", "additive", {}),
@@ -224,7 +217,7 @@ def model_ckpt_paths(repo, seed, best_lam, best_lam_gnan):
 
 
 # --------------------------------------------------------------------------------------------
-# per-seed inference: accuracy for each model, faithfulness/exactness for each method arm
+# per-seed inference: accuracy for each model, exactness for each method arm
 # --------------------------------------------------------------------------------------------
 
 
@@ -234,7 +227,6 @@ def run_seed(
     best_lam,
     best_lam_gnan,
     splits,
-    ref_anchor,
     args,
     device,
     warn,
@@ -242,8 +234,7 @@ def run_seed(
     test_smiles=None,
     wisp_cache=None,
 ):
-    """Return {'acc': {model: {task: {metric: v}}}, 'faith': {col: {task: (pear,n)}},
-              'gap': {col: {task: gap}}}  for one init seed.
+    """Return {'acc': {model: {task: {metric: v}}}, 'gap': {col: {task: gap}}}  for one init seed.
 
     `only` (a set of arm/model keys, e.g. {"gnan"}) restricts computation to those keys.
 
@@ -254,20 +245,13 @@ def run_seed(
     test_loader = DataLoader(splits["test"], batch_size=args.batch_size)
     paths = model_ckpt_paths(repo, seed, best_lam, best_lam_gnan)
 
-    anchored = [
-        (k, ref_anchor[s.name])
-        for k, s in enumerate(TASKS)
-        if ref_anchor[s.name] in ("crippen", "tpsa")
-    ]
-    # Faithfulness scores only the anchored tasks; the completeness gap needs no anchor, so it scores
-    # every task.
     all_idx = list(range(len(TASKS)))
 
     cols = [c for c in COLUMNS if only is None or c[0] in only]
     acc_models = [m[0] for m in MODEL_COLUMNS if only is None or m[0] in only]
     needed = set(acc_models) | {c[2] for c in cols}  # models needed for accuracy and/or attribution
 
-    out = {"acc": {}, "faith": {c[0]: {} for c in cols}, "gap": {c[0]: {} for c in cols}}
+    out = {"acc": {}, "gap": {c[0]: {} for c in cols}}
 
     # ---- load each needed model once; accuracy for the accuracy models, cache the handle ----
     loaded = {}
@@ -289,8 +273,6 @@ def run_seed(
         if mkey not in loaded:
             continue
         model, backbone = loaded[mkey]
-        # Attribute over every task: faithfulness reads the anchored subset below, the completeness
-        # gap reads all of them.
         kw = dict(task_idx=all_idx, **extra)  # `extra` carries the IG baseline (mean/zeros) etc.
         if method == "integrated_gradients":
             kw.setdefault("steps", args.ig_steps)
@@ -307,10 +289,6 @@ def run_seed(
                 d.smiles = smi
             kw["wisp_mutants"] = wisp_cache or {}
         attrs, preds, aux = attribute(model, attr_data, method, backbone, device=device, **kw)
-        abs_ref = method == "attention"  # unsigned/magnitude-only: correlate against |anchor|
-        for k, anchor_attr in anchored:
-            pear, n = faithfulness(attrs, data, k, anchor_attr, abs_ref=abs_ref)
-            out["faith"][col][TASKS[k].name] = (pear, n)
         # Attention has no completeness axiom, so leave its gap empty ("--") instead of reporting
         # a meaningless |sum a_i - dy_hat|.
         if method != "attention":
@@ -341,7 +319,7 @@ def main():
         "--lime_samples",
         type=int,
         default=300,
-        help="LIME perturbation masks per molecule (the lime_pool faithfulness arm).",
+        help="LIME perturbation masks per molecule (the lime_pool arm).",
     )
     p.add_argument(
         "--wisp_cache",
@@ -364,7 +342,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     warn = []
 
-    # Faithfulness reference: ruled Crippen/TPSA anchors.
+    # ruled Crippen/TPSA anchors, recorded in the payload
     ref_specs = apply_anchor_rule(GRAPH_TASK_SPECS)
     ref_anchor = {s.name: a.anchor for s, a in zip(GRAPH_TASK_SPECS, ref_specs)}
 
@@ -408,7 +386,6 @@ def main():
             best_lambda[s],
             best_lambda_gnan[s],
             splits,
-            ref_anchor,
             args,
             device,
             warn,
@@ -422,7 +399,7 @@ def main():
         base = json.loads(Path(args.json_out).read_text())
         merged = {int(k): v for k, v in base["per_seed"].items()}
         for s in SEEDS:
-            for grp in ("acc", "faith", "gap"):
+            for grp in ("acc", "gap"):
                 merged.setdefault(s, {}).setdefault(grp, {}).update(per_seed[s][grp])
         warn = base.get("warnings", []) + warn
         per_seed = merged

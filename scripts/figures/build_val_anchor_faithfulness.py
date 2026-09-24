@@ -352,7 +352,7 @@ def plot():
     rows = [
         ("mae", "MAE ↓", "auto"),
         ("spearman", "Spearman ↑", (0, 1)),
-        ("faith", "Faithfulness ↑", "auto"),
+        ("faith", "Anchor concordance ↑", "auto"),
     ]
     ncol = len(TASKS_MAIN)
     fig, axes = plt.subplots(3, ncol, figsize=(3.0 * ncol, 9.4), squeeze=False)

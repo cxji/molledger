@@ -35,7 +35,7 @@ bash scripts/pipeline/01_data.sh        # download datasets, build conformer cac
 bash scripts/pipeline/02_train.sh       # train every figure arm x 3 seeds
 bash scripts/pipeline/03_score.sh       # attribute checkpoints -> per-pair / per-molecule score dumps
 bash scripts/pipeline/04_aggregate.sh   # aggregate dumps -> runs/*.json tables
-bash scripts/pipeline/05_figures.sh     # render the 11 figures into plots/
+bash scripts/pipeline/05_figures.sh     # render the 12 figures into plots/ and the LaTeX tables into runs/
 ```
 
 What each stage produces:
@@ -46,9 +46,9 @@ What each stage produces:
 - **03_score** → `runs/exact_grid_*`, `runs/ig_grid*`, `runs/gnan_grid`, `runs/ligandformer_grid`,
   `runs/pair_examples_attr.json`, `runs/ig_steps_sweep_val.json`, `runs/leakage_ctx_sweep/`,
   `runs/pairdelta_grid`, `runs/pooled_desc_accuracy.json`.
-- **04_aggregate** → `runs/test_split_tables.json`, `runs/matched_pair_tables{,_igzeros}.json`,
+- **04_aggregate** → `runs/test_split_tables.json`, `runs/matched_pair_tables.json`,
   `runs/val_accuracy_appendix.json`.
-- **05_figures** → the 11 PDFs in `plots/`.
+- **05_figures** → the 12 PDFs in `plots/` and the LaTeX tables in `runs/`.
 
 ## Repository layout
 
@@ -71,10 +71,14 @@ scripts/            stage entrypoints, grouped by pipeline stage
 The figures in the paper are produced by the following scripts in stage 5:
 | Figures | Script |
 |---|---|
-| Figures 1 and 8: Performance metrics | `scripts/figures/plot_results.py` |
-| Figures 2 and 9: Interpretability metrics | `scripts/figures/plot_results.py` |
-| Figures 3, 10, and 11: Case studies | `scripts/figures/plot_pair_interpretations.py` |
-| Figure 4: Ablation of global context vector | `scripts/figures/build_val_global_context_ablation.py` |
-| Figure 5: Anchor strength and head design | `scripts/figures/build_val_anchor_faithfulness.py` |
-| Figure 6: IG exactness vs time trade-off | `scripts/figures/plot_results.py` |
-| Figure 7: Runtime of interpretability methods | `scripts/figures/plot_results.py` |
+| Figures 2 and 9: Performance metrics | `scripts/figures/plot_results.py` |
+| Figure 3: Concordance metrics | `scripts/figures/plot_noncircular_concordance.py` |
+| Figures 4 and 11: Other interpretability metrics | `scripts/figures/plot_results.py` |
+| Figures 5, 12, and 13: Case studies | `scripts/figures/plot_pair_interpretations.py` |
+| Figure 6: Ablation of global context vector | `scripts/figures/build_val_global_context_ablation.py` |
+| Figure 7: Anchor strength and head design | `scripts/figures/build_val_anchor_faithfulness.py` |
+| Figure 8: IG exactness vs time trade-off | `scripts/figures/plot_results.py` |
+| Figure 9: Runtime of interpretability methods | `scripts/figures/plot_results.py` |
+| Table 1: Anchor relevance | `scripts/figure/build_anchor_relevance_table.py` |
+| Tables 2 - 4: Performance metrics | `scripts/figures/build_perf_latex_tables.py` |
+| Tables 5 - 9: Interpretability metrics | `scripts/figures/build_interp_latex_tables.py` |

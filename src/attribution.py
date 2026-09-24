@@ -583,8 +583,6 @@ def matched_pair_decomposition(
     return out
 
 
-
-
 def graph_predictions(model, data_list, backbone="gin", batch_size=64, device="cuda"):
     """Plain `ŷ` per molecule -- works for pooled heads, which have no per-atom scores."""
     model = model.to(device).eval()
